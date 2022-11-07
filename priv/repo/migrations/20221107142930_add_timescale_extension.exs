@@ -1,4 +1,4 @@
-defmodule TimescaleDB.Exporter.Repo.Migrations.AddTimescaleExtension do
+defmodule TimescaleDB.Telemetry.Reporter.Repo.Migrations.AddTimescaleExtension do
   use Ecto.Migration
 
   def up do
