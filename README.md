@@ -1,21 +1,14 @@
-# TimescaleDB.Exporter
-
-**TODO: Add description**
+# WIP: TimescaleDB.Exporter
+Export telemetry events to TimescaleDB.
 
 ## Installation
-
-If [available in Hex](https://hex.pm/docs/publish), the package can be installed
-by adding `timescale_db_exporter` to your list of dependencies in `mix.exs`:
-
 ```elixir
 def deps do
   [
-    {:timescale_db_exporter, "~> 0.1.0"}
+    {:timescale_db_exporter, github: "kim-company/timescale_db_exporter"}
   ]
 end
 ```
-
-Documentation can be generated with [ExDoc](https://github.com/elixir-lang/ex_doc)
-and published on [HexDocs](https://hexdocs.pm). Once published, the docs can
-be found at <https://hexdocs.pm/timescale_db_exporter>.
-
+## Copyright and License
+Copyright 2022, [KIM Keep In Mind GmbH](https://www.keepinmind.info/)
+Licensed under the [Apache License, Version 2.0](LICENSE)
