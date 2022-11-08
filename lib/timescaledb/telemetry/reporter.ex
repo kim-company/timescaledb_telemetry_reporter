@@ -25,14 +25,14 @@ defmodule TimescaleDB.Telemetry.Reporter do
 
     for {event, metrics} <- groups do
       id = {__MODULE__, event, self()}
-      :telemetry.attach(id, event, &handle_event/4, metrics)
+      :telemetry.attach(id, event, &handle_event/4, %{metrics: metrics, repo: repo})
     end
 
-    {:ok, %{events: Map.keys(groups), repo: repo}}
+    {:ok, Map.keys(groups)}
   end
 
   @impl true
-  def terminate(_, %{events: events}) do
+  def terminate(_, events) do
     for event <- events do
       :telemetry.detach({__MODULE__, event, self()})
     end
@@ -40,7 +40,7 @@ defmodule TimescaleDB.Telemetry.Reporter do
     :ok
   end
 
-  defp handle_event(event_name, measurements, metadata, %{events: metrics, repo: repo}) do
+  defp handle_event(event_name, measurements, metadata, %{metrics: metrics, repo: repo}) do
     event_name =  Enum.join(event_name, ".")
 
     for %struct{} = metric <- metrics do
@@ -80,7 +80,7 @@ defmodule TimescaleDB.Telemetry.Reporter do
   end
 
   defp unit(:unit), do: ""
-  defp unit(unit), do: " #{unit}"
+  defp unit(unit), do: "#{unit}"
 
   defp metric(Telemetry.Metrics.Counter), do: "counter"
   defp metric(Telemetry.Metrics.Distribution), do: "distribution"
