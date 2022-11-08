@@ -77,7 +77,6 @@ defmodule TimescaleDB.Telemetry.Reporter.Sink do
             nil
 
           not keep?(metric, metadata) ->
-            Logger.debug("Measurement #{event_name}: event dropped")
             nil
 
           true ->
