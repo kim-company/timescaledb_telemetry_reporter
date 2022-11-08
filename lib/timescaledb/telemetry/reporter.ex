@@ -38,7 +38,7 @@ defmodule TimescaleDB.Telemetry.Reporter do
           opts
           |> Keyword.take([:repo, :namespace, :buffer_cap])
           |> Keyword.put(:metrics, metrics)
-          |> Keyword.put(:telemetry_label, "#{inspect(id)}")
+          |> Keyword.put(:telemetry_label, "#{Sink}")
           |> Sink.start_link()
 
         :telemetry.attach(id, event, &__MODULE__.handle_event/4, pid)
