@@ -24,6 +24,7 @@ defmodule TimescaleDB.Telemetry.Reporter.MixProject do
       {:ecto_sql, "~> 3.0", optional: true},
       {:jason, "~> 1.0"},
       {:telemetry_metrics, "~> 0.6"},
+      {:kim_q, github: "kim-company/kim_q"}
     ]
   end
 end

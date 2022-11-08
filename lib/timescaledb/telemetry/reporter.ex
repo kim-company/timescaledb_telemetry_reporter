@@ -1,109 +1,69 @@
 defmodule TimescaleDB.Telemetry.Reporter do
   use GenServer
-  require Logger
 
-  alias TimescaleDB.Telemetry.Reporter.Metric
+  alias TimescaleDB.Telemetry.Reporter.Sink
 
   def start_link(opts) do
     server_opts = Keyword.take(opts, [:name])
-    namespace = Keyword.get(opts, :namespace, "")
 
-    metrics =
-      opts[:metrics] ||
-        raise ArgumentError, "the :metrics option is required by #{inspect(__MODULE__)}"
+    mandatory =
+      Enum.map([:metrics, :repo], fn key ->
+        {key,
+         Keyword.get_lazy(opts, key, fn ->
+           raise ArgumentError, "#{inspect(key)} option is required by #{inspect(__MODULE__)}"
+         end)}
+      end)
 
-    repo =
-      opts[:repo] ||
-        raise ArgumentError, "the :repo option is required by #{inspect(__MODULE__)}"
+    extra = Keyword.take(opts, [:namespace, :buffer_cap])
 
     GenServer.start_link(
       __MODULE__,
-      %{metrics: metrics, repo: repo, namespace: namespace},
+      Keyword.merge(extra, mandatory),
       server_opts
     )
   end
 
   @impl true
-  def init(%{metrics: metrics, repo: repo, namespace: namespace}) do
+  def init(opts) do
     Process.flag(:trap_exit, true)
-    groups = Enum.group_by(metrics, & &1.event_name)
+    metrics = Keyword.fetch!(opts, :metrics)
 
-    for {event, metrics} <- groups do
-      id = {__MODULE__, event, self()}
+    state =
+      metrics
+      |> Enum.group_by(fn %{event_name: x} -> x end)
+      |> Enum.map(fn {event, metrics} ->
+        id = {__MODULE__, event, self()}
 
-      :telemetry.attach(id, event, &handle_event/4, %{
-        metrics: metrics,
-        repo: repo,
-        namespace: namespace
-      })
-    end
+        {:ok, pid} =
+          opts
+          |> Keyword.take([:repo, :namespace, :buffer_cap])
+          |> Keyword.put(:metrics, metrics)
+          |> Keyword.put(:telemetry_label, "#{inspect(id)}")
+          |> Sink.start_link()
 
-    {:ok, Map.keys(groups)}
+        :telemetry.attach(id, event, &__MODULE__.handle_event/4, pid)
+        %{event: event, pid: pid}
+      end)
+
+    {:ok, state}
   end
 
   @impl true
-  def terminate(_, events) do
-    for event <- events do
+  def terminate(_, state) do
+    state
+    |> Enum.map(fn %{event: event, pid: pid} ->
+      Sink.flush(pid)
+      Sink.stop(pid)
+      event
+    end)
+    |> Enum.map(fn event ->
       :telemetry.detach({__MODULE__, event, self()})
-    end
+    end)
 
     :ok
   end
 
-  defp handle_event(event_name, measurements, metadata, %{
-         metrics: metrics,
-         repo: repo,
-         namespace: namespace
-       }) do
-    event_name = Enum.join(event_name, ".")
-
-    for %struct{} = metric <- metrics do
-      measurement = extract_measurement(metric, measurements, metadata)
-
-      cond do
-        is_nil(measurement) ->
-          Logger.warn("Measurement #{event_name}: value is missing (metric skipped)")
-
-        not keep?(metric, metadata) ->
-          Logger.debug("Measurement #{event_name}: event dropped")
-
-        true ->
-          %Metric{
-            time: DateTime.utc_now(),
-            event_name: event_name,
-            measurement: measurement,
-            unit: unit(metric.unit),
-            metric: metric(struct),
-            tags: Map.put(extract_tags(metric, metadata), :namespace, namespace)
-          }
-          # TODO: aggregate metrics and write them in batches.
-          |> repo.insert!()
-      end
-    end
-  end
-
-  defp keep?(%{keep: nil}, _metadata), do: true
-  defp keep?(metric, metadata), do: metric.keep.(metadata)
-
-  defp extract_measurement(metric, measurements, metadata) do
-    case metric.measurement do
-      fun when is_function(fun, 2) -> fun.(measurements, metadata)
-      fun when is_function(fun, 1) -> fun.(measurements)
-      key -> measurements[key]
-    end
-  end
-
-  defp unit(:unit), do: ""
-  defp unit(unit), do: "#{unit}"
-
-  defp metric(Telemetry.Metrics.Counter), do: "counter"
-  defp metric(Telemetry.Metrics.Distribution), do: "distribution"
-  defp metric(Telemetry.Metrics.LastValue), do: "last_value"
-  defp metric(Telemetry.Metrics.Sum), do: "sum"
-  defp metric(Telemetry.Metrics.Summary), do: "summary"
-
-  defp extract_tags(metric, metadata) do
-    tag_values = metric.tag_values.(metadata)
-    Map.take(tag_values, metric.tags)
+  def handle_event(event_name, measurements, metadata, pid) do
+    :ok = Sink.handle(pid, event_name, measurements, metadata)
   end
 end
