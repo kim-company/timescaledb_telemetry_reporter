@@ -8,7 +8,7 @@ defmodule TimescaleDB.Telemetry.Reporter.Migrations do
       add :time, :utc_datetime_usec, null: false
       add :event_name, :string, null: false
       add :metric, :string, null: false
-      add :measurement, :integer, null: false
+      add :measurement, :bigint, null: false
       add :unit, :string, null: false 
       add :tags, :map, null: false
    end

@@ -1,31 +1,41 @@
 defmodule TimescaleDB.Telemetry.Reporter do
   use GenServer
   require Logger
-  
+
   alias TimescaleDB.Telemetry.Reporter.Metric
 
   def start_link(opts) do
     server_opts = Keyword.take(opts, [:name])
+    namespace = Keyword.get(opts, :namespace, "")
 
     metrics =
       opts[:metrics] ||
         raise ArgumentError, "the :metrics option is required by #{inspect(__MODULE__)}"
+
     repo =
       opts[:repo] ||
         raise ArgumentError, "the :repo option is required by #{inspect(__MODULE__)}"
 
-
-    GenServer.start_link(__MODULE__, %{metrics: metrics, repo: repo}, server_opts)
+    GenServer.start_link(
+      __MODULE__,
+      %{metrics: metrics, repo: repo, namespace: namespace},
+      server_opts
+    )
   end
 
   @impl true
-  def init(%{metrics: metrics, repo: repo}) do
+  def init(%{metrics: metrics, repo: repo, namespace: namespace}) do
     Process.flag(:trap_exit, true)
     groups = Enum.group_by(metrics, & &1.event_name)
 
     for {event, metrics} <- groups do
       id = {__MODULE__, event, self()}
-      :telemetry.attach(id, event, &handle_event/4, %{metrics: metrics, repo: repo})
+
+      :telemetry.attach(id, event, &handle_event/4, %{
+        metrics: metrics,
+        repo: repo,
+        namespace: namespace
+      })
     end
 
     {:ok, Map.keys(groups)}
@@ -40,8 +50,12 @@ defmodule TimescaleDB.Telemetry.Reporter do
     :ok
   end
 
-  defp handle_event(event_name, measurements, metadata, %{metrics: metrics, repo: repo}) do
-    event_name =  Enum.join(event_name, ".")
+  defp handle_event(event_name, measurements, metadata, %{
+         metrics: metrics,
+         repo: repo,
+         namespace: namespace
+       }) do
+    event_name = Enum.join(event_name, ".")
 
     for %struct{} = metric <- metrics do
       measurement = extract_measurement(metric, measurements, metadata)
@@ -60,7 +74,7 @@ defmodule TimescaleDB.Telemetry.Reporter do
             measurement: measurement,
             unit: unit(metric.unit),
             metric: metric(struct),
-            tags: extract_tags(metric, metadata)
+            tags: Map.put(extract_tags(metric, metadata), :namespace, namespace)
           }
           # TODO: aggregate metrics and write them in batches.
           |> repo.insert!()
