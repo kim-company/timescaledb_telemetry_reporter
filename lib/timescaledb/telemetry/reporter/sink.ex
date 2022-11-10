@@ -1,120 +1,64 @@
 defmodule TimescaleDB.Telemetry.Reporter.Sink do
-  use GenServer
-  require Logger
+  use GenStage
 
-  alias TimescaleDB.Telemetry.Reporter.Metric
-
-  @default_buffer_cap 300
-  @default_buffer_flush_interval_ms 3 * 1000
+  alias TimescaleDB.Telemetry.Reporter.{Broadcaster, Metric}
 
   def start_link(opts) do
-    GenServer.start_link(__MODULE__, opts)
-  end
-
-  def handle(pid, event_name, measurements, metadata) do
-    GenServer.cast(pid, {:event, event_name, measurements, metadata})
-  end
-
-  def stop(pid, reason \\ :normal, timeout \\ :infinity) do
-    GenServer.stop(pid, reason, timeout)
-  end
-
-  def flush(state = %{queue: queue, repo: repo, telemetry_label: label}) do
-    metrics = Enum.into(queue.queue, [])
-    repo.insert_all(Metric, metrics)
-    %{state | queue: Q.new(label)}
-  end
-
-  def flush(pid) do
-    GenServer.call(pid, :flush)
+    metrics = Keyword.fetch!(opts, :metrics)
+    repo = Keyword.fetch!(opts, :repo)
+    extra_tags = Keyword.get(opts, :extra_tags, %{})
+    GenStage.start_link(__MODULE__, %{metrics: metrics, extra_tags: extra_tags, repo: repo})
   end
 
   @impl true
-  def init(opts) do
-    # mandatory
-    [metrics, repo] =
-      Enum.map([:metrics, :repo], fn key ->
-        Keyword.fetch!(opts, key)
-      end)
-
-    extra_tags =
-      opts
-      |> Keyword.take([:namespace])
-      |> Enum.into(%{})
-
-    cap = Keyword.get(opts, :buffer_cap, @default_buffer_cap)
-    telemetry_label = Keyword.get(opts, :telemetry_label, "#{__MODULE__}")
-    queue = Q.new(telemetry_label)
-    
-    :erlang.start_timer(@default_buffer_flush_interval_ms, self(), :flush)
-
-    {:ok,
-     %{
-       queue: queue,
-       cap: cap,
-       metrics: metrics,
-       repo: repo,
-       extra_tags: extra_tags,
-       telemetry_label: telemetry_label,
-     }}
+  def init(config) do
+    {:consumer, config, subscribe_to: [Broadcaster]}
   end
 
   @impl true
-  def handle_cast({:event, event_name, measurements, metadata}, state) do
-    %{queue: queue, metrics: metrics, extra_tags: extra_tags, cap: cap} = state
+  def handle_events(events, _from, state) do
+    metrics = Enum.flat_map(events, &to_reporter_metrics(&1, state))
 
+    try do
+      state.repo.insert_all(Metric, metrics)
+    rescue
+      DBConnection.ConnectionError ->
+        :ok
+    end
+
+    {:noreply, [], state}
+  end
+
+  defp to_reporter_metrics(
+         %{event_name: event_name, measurements: measurements, metadata: metadata, t: t},
+         state
+       ) do
+    %{metrics: metrics, extra_tags: extra_tags} = state
     event_name = Enum.join(event_name, ".")
-    now = DateTime.utc_now()
 
-    queue =
-      metrics
-      |> Enum.map(fn %struct{} = metric ->
-        measurement = extract_measurement(metric, measurements, metadata)
+    metrics
+    |> Enum.map(fn %struct{} = metric ->
+      measurement = extract_measurement(metric, measurements, metadata)
+      skip? = is_nil(measurement) or not keep?(metric, metadata)
 
-        cond do
-          is_nil(measurement) ->
-            Logger.warn("Measurement #{event_name}: value is missing in #{inspect measurements} (metric skipped)")
-            nil
+      if skip? do
+        # Logger.warn(
+        #   "Measurement #{event_name}: #{inspect metric} is missing in #{inspect(measurements)} (metric skipped)"
+        # )
 
-          not keep?(metric, metadata) ->
-            nil
-
-          true ->
-            %{
-              time: now,
-              event_name: event_name,
-              measurement: measurement,
-              unit: unit(metric.unit),
-              metric: metric(struct),
-              tags: Map.merge(extra_tags, extract_tags(metric, metadata))
-            }
-        end
-      end)
-      |> Enum.filter(fn x -> x != nil end)
-      |> Enum.reduce(queue, fn metric, queue ->
-        Q.push(queue, metric)
-      end)
-
-    state = %{state | queue: queue}
-
-    state =
-      if queue.count >= cap do
-        flush(state)
+        nil
       else
-        state
+        %{
+          time: t,
+          event_name: event_name,
+          measurement: measurement,
+          unit: unit(metric.unit),
+          metric: metric(struct),
+          tags: Map.merge(extra_tags, extract_tags(metric, metadata))
+        }
       end
-
-    {:noreply, state}
-  end
-  
-  @impl true
-  def handle_call(:flush, _from, state) do
-    {:reply, :ok, flush(state)}
-  end
-  
-  @impl true
-  def handle_info({:timeout, _, :flush}, state) do
-    {:noreply, flush(state)}
+    end)
+    |> Enum.filter(fn x -> x != nil end)
   end
 
   defp keep?(%{keep: nil}, _metadata), do: true
