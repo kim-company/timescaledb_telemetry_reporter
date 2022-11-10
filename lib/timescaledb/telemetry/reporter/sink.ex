@@ -73,7 +73,7 @@ defmodule TimescaleDB.Telemetry.Reporter.Sink do
 
         cond do
           is_nil(measurement) ->
-            Logger.warn("Measurement #{event_name}: value is missing (metric skipped)")
+            Logger.warn("Measurement #{event_name}: value is missing in #{inspect measurements} (metric skipped)")
             nil
 
           not keep?(metric, metadata) ->
